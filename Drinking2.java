@@ -20,7 +20,7 @@ import com.kuka.roboticsAPI.uiModel.ApplicationDialogType;
  * 
  * Designed for rehabilitation applications - helps stroke survivors and post-surgery patients.
  */
-public class DrinkingMotion extends RoboticsAPIApplication {
+public class Drinking2 extends RoboticsAPIApplication {
     // Robot declaration
     private LBR lbr;
     

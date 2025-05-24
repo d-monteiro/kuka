@@ -27,6 +27,7 @@ public class DrinkingData extends RoboticsAPIApplication {
     private static final String PC_IP = "172.31.1.148"; // PC's IP address
     private static final int UDP_PC_PORT = 30001;       // PC's UDP port for torque data
     private static final int UDP_LOCAL_PORT = 30001;   // Local UDP port on robot
+    private static final int UDP_MOTION = 30002;
     
     // Motion parameters - now modifiable via external input
     private static final double VELOCITY_FACTOR = 0.15; // Slow movement for safety
@@ -40,8 +41,9 @@ public class DrinkingData extends RoboticsAPIApplication {
     // Motion control flags
     private volatile boolean stopMotion = false;
     private volatile boolean motionActive = false;
+    private volatile boolean executeMotion = false;
     
-    // Starting position
+    // Starting position	
     private final double[] startPosition = new double[]{
         Math.toRadians(-22), Math.toRadians(-110), Math.toRadians(-33), 
         Math.toRadians(71), Math.toRadians(-11), Math.toRadians(78), 
@@ -75,9 +77,23 @@ public class DrinkingData extends RoboticsAPIApplication {
         ptpToStartPosition.setJointVelocityRel(VELOCITY_FACTOR);
         lbr.move(ptpToStartPosition);
         
-        // Start torque monitoring and transmission thread
-        Thread torqueThread = new Thread(this::transmitTorqueData);
+        // Start monitoring thread using explicit Runnable
+        Thread torqueThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                transmitTorqueData();
+            }
+        });
         torqueThread.start();
+        
+        Thread commandThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                receiveCommands();
+            }
+        });
+        commandThread.setDaemon(true);
+        commandThread.start();
         
         // Main control loop - wait for external commands or motion execution
         try {
@@ -203,30 +219,14 @@ public class DrinkingData extends RoboticsAPIApplication {
     }
     
     /**
-     * Check if motion should be executed (placeholder for external command system)
-     * In practice, this would check for commands received from the GUI
+     * Check if motion should be executed
      */
     private boolean shouldExecuteMotion() {
-        // This is a simplified version - in practice you'd implement
-        // a command reception system here
-        return false; // Will be controlled externally
-    }
-    
-    /**
-     * Method to be called externally to start motion
-     */
-    public void startMotion() {
-        // This would be called by external command system
-    }
-    
-    /**
-     * Method to be called externally to stop motion
-     */
-    public void stopMotion() {
-        this.stopMotion = true;
-        if (motionActive) {
-            lbr.stop(); // Immediate stop
+        if (executeMotion && !motionActive) {
+            executeMotion = false; // Reset flag
+            return true;
         }
+        return false;
     }
     
     /**
@@ -287,5 +287,52 @@ public class DrinkingData extends RoboticsAPIApplication {
         impedanceControlMode.parametrize(CartDOF.ALL).setDamping(0.7);
         
         return impedanceControlMode;
+    }
+    
+    /**
+     * Receives commands from the PC GUI using the existing UDP socket setup
+     */
+    private void receiveCommands() {
+        try {
+            // Create a separate socket for receiving commands on the same port as main communication
+            DatagramSocket commandSocket = new DatagramSocket(UDP_MOTION);
+            commandSocket.setSoTimeout(100); // 100ms timeout
+            
+            byte[] buffer = new byte[1024];
+            
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                    commandSocket.receive(packet);
+                    
+                    String message = new String(packet.getData(), 0, packet.getLength(), "UTF-8");
+                    String[] parts = message.split(";");
+                    
+                    if (parts.length >= 4) {
+                        String command = parts[2]; // Command is in 3rd position
+                        String value = parts[3];   // Value is in 4th position
+                        
+                        if ("START_MOTION".equals(command) && "true".equals(value)) {
+                            getLogger().info("Motion start command received");
+                            executeMotion = true;
+                        }
+                        else if ("Emergency_Stop".equals(command) && "true".equals(value)) {
+                            getLogger().info("Emergency stop command received");
+                        }
+                    }
+                    
+                } catch (java.net.SocketTimeoutException e) {
+                    // Timeout is normal, continue loop
+                    continue;
+                } catch (Exception e) {
+                    // Log error but continue
+                    continue;
+                }
+            }
+            
+            commandSocket.close();
+        } catch (Exception e) {
+            getLogger().error("Command reception error: " + e.getMessage());
+        }
     }
 }
